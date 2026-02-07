@@ -112,35 +112,35 @@ The system is built on a **Stateless Architecture** with **Database-backed State
 
 # Configure CORS for frontend integration
 # For Hugging Face Spaces, allow all origins by default
-# You can restrict this in production by setting ALLOW_ALL_ORIGINS=false
+# CORS Configuration
+# For development: allow localhost
+# For production: allow from ALLOWED_ORIGINS or use regex for https origins
 allow_all_origins = os.getenv("ALLOW_ALL_ORIGINS", "true").lower() == "true"
 
 if allow_all_origins:
-    # If allowing all origins with credentials, we must use a regex or specific list
-    # The wildcard "*" is not valid with allow_credentials=True
-    cors_origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
-    # We could use allow_origin_regex, but explicitly listing common dev origins is safer/simpler
-    # If you need to allow dynamic origins, you can add them to ALLOWED_ORIGINS
+    # Development: Allow localhost and any https origins (for Vercel, etc.)
+    # Using regex to allow any HTTPS origin in production
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^(http://localhost.*|http://127\.0\.0\.1.*|https://.*)",
+        allow_credentials=True,
+        allow_methods=["*"],  # Allow all HTTP methods
+        allow_headers=["*"],  # Allow all headers
+    )
 else:
-    # Specific origins (comma-separated in ALLOWED_ORIGINS env var)
-    allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "")
+    # Production: Specific origins (comma-separated in ALLOWED_ORIGINS env var)
+    allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
     cors_origins = [
         origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()
     ]
-    # Default to localhost if none specified
-    if not cors_origins:
-        cors_origins = [
-            "http://localhost:3000",
-            "http://127.0.0.1:3000",
-        ]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],  # Allow all HTTP methods
-    allow_headers=["*"],  # Allow all headers
-)
+    
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],  # Allow all HTTP methods
+        allow_headers=["*"],  # Allow all headers
+    )
 
 # Register API routers
 app.include_router(auth.router, prefix="/api", tags=["authentication"])
