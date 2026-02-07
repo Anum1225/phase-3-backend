@@ -86,26 +86,49 @@ async def create_agent(
         tracing_disabled=True
     )
 
-    # Create MCP server connection
+    # Create MCP server connection with increased timeout for production
+    # In production, the MCP server might take a bit longer to respond on first request
+    mcp_timeout = config["mcp_timeout_seconds"]
+    if os.getenv("PORT"):  # Production (Render)
+        mcp_timeout = max(mcp_timeout, 60)  # Increase to 60 seconds in production
+    
     mcp_server = MCPServerStreamableHttp(
         name="Todo MCP Server",
         params={
             "url": server_url,
-            "timeout": config["mcp_timeout_seconds"],
+            "timeout": mcp_timeout,
         },
         cache_tools_list=True,  # Cache for performance
     )
 
     # Initialize MCP connection with error handling
     mcp_connected = False
-    try:
-        await mcp_server.__aenter__()
-        logging.info("MCP server connected successfully")
-        mcp_connected = True
-    except Exception as e:
-        logging.error(f"Failed to connect to MCP server at {server_url}: {str(e)}")
-        logging.warning("Creating agent WITHOUT MCP server - will have limited functionality")
-        mcp_server = None  # Clear the failed server instance
+    max_retries = 3
+    retry_count = 0
+    
+    while retry_count < max_retries and not mcp_connected:
+        try:
+            retry_count += 1
+            logging.info(f"Initiating MCP server connection (attempt {retry_count}/{max_retries})...")
+            await mcp_server.__aenter__()
+            logging.info("MCP server connected successfully")
+            mcp_connected = True
+        except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            logging.error(f"MCP connection attempt {retry_count} failed for {server_url}")
+            logging.error(f"Error type: {type(e).__name__}")
+            logging.error(f"Error message: {str(e)}")
+            
+            if retry_count >= max_retries:
+                logging.error(f"All {max_retries} connection attempts failed")
+                logging.error(f"Full traceback:\n{error_traceback}")
+                logging.warning("Creating agent WITHOUT MCP server - will have limited functionality")
+                mcp_server = None  # Clear the failed server instance
+                mcp_connected = False
+            else:
+                logging.info(f"Retrying in 1 second...")
+                await asyncio.sleep(1)  # Wait before retry
 
     # Create agent - only include MCP servers if connection was successful
     mcp_servers_list = [mcp_server] if mcp_connected and mcp_server else []
