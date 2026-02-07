@@ -31,7 +31,7 @@ from ..models.message import Message
 
 async def create_agent(
     mcp_server_url: Optional[str] = None,
-) -> tuple[Agent, MCPServerStreamableHttp, RunConfig]:
+) -> tuple[Agent, Optional[MCPServerStreamableHttp], RunConfig]:
     """
     Create the Todo Assistant agent with MCP server connection.
 
@@ -39,7 +39,8 @@ async def create_agent(
         mcp_server_url: Optional MCP server URL (uses env var if not provided)
 
     Returns:
-        Tuple of (Agent instance, MCP server connection, RunConfig)
+        Tuple of (Agent instance, MCP server connection or None, RunConfig)
+        Note: MCP server will be None if connection fails
 
     Raises:
         ValueError: If OPENAI_API_KEY is not set
@@ -96,20 +97,23 @@ async def create_agent(
     )
 
     # Initialize MCP connection with error handling
+    mcp_connected = False
     try:
         await mcp_server.__aenter__()
         logging.info("MCP server connected successfully")
+        mcp_connected = True
     except Exception as e:
         logging.error(f"Failed to connect to MCP server at {server_url}: {str(e)}")
-        logging.warning("Continuing without MCP server - agent will have limited functionality")
-        # Don't re-raise - we'll let the agent run with limited tools
-        # In production, the MCP server should be available, but this prevents hard failures
+        logging.warning("Creating agent WITHOUT MCP server - will have limited functionality")
+        mcp_server = None  # Clear the failed server instance
 
-    # Create agent (model specified in run_config)
+    # Create agent - only include MCP servers if connection was successful
+    mcp_servers_list = [mcp_server] if mcp_connected and mcp_server else []
+    
     agent = Agent(
         name="Todo Assistant",
         instructions=get_system_prompt(),
-        mcp_servers=[mcp_server],
+        mcp_servers=mcp_servers_list,
     )
 
     return agent, mcp_server, run_config
