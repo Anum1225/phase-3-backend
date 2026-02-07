@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 
 from agents import AsyncOpenAI, OpenAIChatCompletionsModel, Agent, Runner
 from openai.types.responses import ResponseTextDeltaEvent
-from agents.mcp import MCPServerStreamableHttp
+from agents.mcp import MCPServerStreamableHttp, MCPServer
 from agents.run import RunConfig
 
 from .config import (
@@ -27,6 +27,14 @@ from .config import (
     format_conversation_history,
 )
 from ..models.message import Message
+
+# Import the MCP server instance for direct connection
+try:
+    from src.mcp import mcp as mcp_server_instance
+    HAS_DIRECT_MCP = True
+except ImportError:
+    HAS_DIRECT_MCP = False
+    mcp_server_instance = None
 
 
 async def create_agent(
@@ -92,46 +100,68 @@ async def create_agent(
     if os.getenv("PORT"):  # Production (Render)
         mcp_timeout = max(mcp_timeout, 60)  # Increase to 60 seconds in production
     
-    mcp_server = MCPServerStreamableHttp(
-        name="Todo MCP Server",
-        params={
-            "url": server_url,
-            "timeout": mcp_timeout,
-        },
-        cache_tools_list=True,  # Cache for performance
-    )
-
-    # Initialize MCP connection with error handling
-    mcp_connected = False
-    max_retries = 3
-    retry_count = 0
-    
-    while retry_count < max_retries and not mcp_connected:
+    # Try using direct MCP server instance first (same process)
+    if HAS_DIRECT_MCP and mcp_server_instance:
         try:
-            retry_count += 1
-            logging.info(f"Initiating MCP server connection (attempt {retry_count}/{max_retries})...")
-            await mcp_server.__aenter__()
-            logging.info("MCP server connected successfully")
+            logging.info("Attempting to use direct MCP server instance...")
+            mcp_server = mcp_server_instance
             mcp_connected = True
+            logging.info("Direct MCP server instance available")
         except Exception as e:
-            import traceback
-            error_traceback = traceback.format_exc()
-            logging.error(f"MCP connection attempt {retry_count} failed for {server_url}")
-            logging.error(f"Error type: {type(e).__name__}")
-            logging.error(f"Error message: {str(e)}")
-            
-            if retry_count >= max_retries:
-                logging.error(f"All {max_retries} connection attempts failed")
-                logging.error(f"Full traceback:\n{error_traceback}")
-                logging.warning("Creating agent WITHOUT MCP server - will have limited functionality")
-                mcp_server = None  # Clear the failed server instance
-                mcp_connected = False
-            else:
-                logging.info(f"Retrying in 1 second...")
-                await asyncio.sleep(1)  # Wait before retry
+            logging.warning(f"Failed to use direct MCP server: {e}")
+            mcp_server = None
+            mcp_connected = False
+    else:
+        mcp_server = None
+        mcp_connected = False
+    
+    # Fall back to HTTP connection if direct server not available
+    if not mcp_connected:
+        mcp_server = MCPServerStreamableHttp(
+            name="Todo MCP Server",
+            params={
+                "url": server_url,
+                "timeout": mcp_timeout,
+            },
+            cache_tools_list=True,  # Cache for performance
+        )
+
+        # Initialize MCP connection with error handling and retry
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries and not mcp_connected:
+            try:
+                retry_count += 1
+                logging.info(f"Initiating MCP HTTP connection (attempt {retry_count}/{max_retries})...")
+                logging.info(f"Connecting to: {server_url}")
+                await mcp_server.__aenter__()
+                logging.info("MCP HTTP server connected successfully")
+                mcp_connected = True
+            except Exception as e:
+                import traceback
+                error_traceback = traceback.format_exc()
+                logging.error(f"MCP connection attempt {retry_count} failed for {server_url}")
+                logging.error(f"Error type: {type(e).__name__}")
+                logging.error(f"Error message: {str(e)}")
+                
+                if retry_count >= max_retries:
+                    logging.error(f"All {max_retries} connection attempts failed")
+                    logging.error(f"Full traceback:\n{error_traceback}")
+                    logging.warning("Creating agent WITHOUT MCP server - will have limited functionality")
+                    mcp_server = None  # Clear the failed server instance
+                    mcp_connected = False
+                else:
+                    logging.info(f"Retrying in 1 second...")
+                    await asyncio.sleep(1)  # Wait before retry
 
     # Create agent - only include MCP servers if connection was successful
     mcp_servers_list = [mcp_server] if mcp_connected and mcp_server else []
+    
+    if mcp_servers_list:
+        logging.info(f"Creating agent WITH MCP server ({len(mcp_servers_list)} server(s))")
+    else:
+        logging.warning("Creating agent WITHOUT MCP server - limited functionality")
     
     agent = Agent(
         name="Todo Assistant",
@@ -264,6 +294,10 @@ async def run_agent_streamed(
 
         # Run agent with streaming and config
         logging.info("Starting agent run_streamed...")
+        logging.info(f"Agent MCP servers: {len(agent.mcp_servers) if agent.mcp_servers else 0}")
+        if agent.mcp_servers:
+            logging.info(f"Agent has {len(agent.mcp_servers)} MCP server(s) configured")
+        
         result = Runner.run_streamed(
             agent,
             full_input,
