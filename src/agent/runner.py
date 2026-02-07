@@ -65,6 +65,7 @@ async def create_agent(
     # Get model from config
     model_name = config["model"]
     logging.info(f"Using model: {model_name}")
+    logging.info(f"Attempting to connect to MCP server at: {server_url}")
 
     # Setup OpenAI client
     external_provider = AsyncOpenAI(
@@ -94,8 +95,15 @@ async def create_agent(
         cache_tools_list=True,  # Cache for performance
     )
 
-    # Initialize MCP connection
-    await mcp_server.__aenter__()
+    # Initialize MCP connection with error handling
+    try:
+        await mcp_server.__aenter__()
+        logging.info("MCP server connected successfully")
+    except Exception as e:
+        logging.error(f"Failed to connect to MCP server at {server_url}: {str(e)}")
+        logging.warning("Continuing without MCP server - agent will have limited functionality")
+        # Don't re-raise - we'll let the agent run with limited tools
+        # In production, the MCP server should be available, but this prevents hard failures
 
     # Create agent (model specified in run_config)
     agent = Agent(

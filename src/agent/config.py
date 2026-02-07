@@ -20,7 +20,24 @@ AGENT_MAX_TOKENS = int(os.getenv("AGENT_MAX_TOKENS", "1000"))
 MAX_CONVERSATION_HISTORY = int(os.getenv("MAX_CONVERSATION_HISTORY", "50"))
 
 # MCP Server Configuration
-MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8000/api/mcp")
+# In production (Render, etc), use the dynamic PORT env var
+# In development, default to localhost:8000
+def _get_mcp_server_url() -> str:
+    """Determine MCP server URL based on environment."""
+    # If explicitly set, use it
+    if explicit_url := os.getenv("MCP_SERVER_URL"):
+        return explicit_url
+    
+    # Check if we're in production (Render sets PORT env var)
+    port = os.getenv("PORT")
+    if port:
+        # Production: Use localhost with the dynamic port
+        return f"http://127.0.0.1:{port}/api/mcp"
+    
+    # Development: Default to localhost:8000
+    return "http://localhost:8000/api/mcp"
+
+MCP_SERVER_URL = _get_mcp_server_url()
 MCP_TIMEOUT_SECONDS = int(os.getenv("MCP_TIMEOUT_SECONDS", "30"))
 
 
